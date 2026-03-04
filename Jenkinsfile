@@ -26,11 +26,11 @@ agent {
     stages {
 
         // 1️⃣ Clone Next.js Code
-        // stage('Clone Code') {
-        //     steps {
-        //         git 'https://github.com/seang454/frontend-docuhub'  // 🔁 Change this
-        //     }
-        // }
+        stage('Clone Code') {
+            steps {
+                git 'https://github.com/seang454/frontend-docuhub'  // 🔁 Change this
+            }
+        }
 
         // 2️⃣ Install Dependencies & Run Tests
         stage('Install & Test') {
