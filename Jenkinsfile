@@ -3,7 +3,7 @@
 pipeline {
     agent {
         kubernetes {
-            yamlFile 'jenkins/pod-template.yaml'
+            yamlFile 'next/pod-template.yaml'
             defaultContainer 'node'
         }
     }
