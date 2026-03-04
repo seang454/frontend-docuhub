@@ -3,7 +3,7 @@
 pipeline {
     agent {
         kubernetes {
-            yamlFile 'resources/next/pod-template.yaml'
+            yaml libraryResource('next/pod-template.yaml')  // ✅ reads from shared library
             defaultContainer 'node'
         }
     }
