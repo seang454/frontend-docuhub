@@ -1,14 +1,19 @@
 @Library('devop_itp_share_library@master') _
 
 pipeline {
-    agent any
+    agent {
+        kubernetes {
+            yamlFile 'jenkins/pod-template.yaml'
+            defaultContainer 'node'
+        }
+    }
 
     environment {
-        REPO_NAME  = 'your-dockerhub-username'   // 🔁 Change this
-        IMAGE_NAME = 'jenkins-itp-nextjs'
-        TAG        = 'latest'
+        REPO_NAME      = 'seang454'   // 🔁 Change this
+        IMAGE_NAME     = 'jenkins-itp-nextjs'
+        TAG            = 'latest'
         CONTAINER_NAME = 'nextjs-app'
-        PORT       = '3000'
+        PORT           = '3000'
     }
 
     stages {
@@ -23,14 +28,18 @@ pipeline {
         // 2️⃣ Install Dependencies & Run Tests
         stage('Install & Test') {
             steps {
-                script {
-                    if (fileExists('package.json')) {
-                        sh '''
-                        npm ci
-                        npm run test --if-present
-                        '''
-                    } else {
-                        error "No package.json found — is this a Next.js project?"
+                container('node') {
+                    script {
+                        if (fileExists('package.json')) {
+                            sh '''
+                            node --version
+                            npm --version
+                            npm ci
+                            npm run test --if-present
+                            '''
+                        } else {
+                            error "No package.json found — is this a Next.js project?"
+                        }
                     }
                 }
             }
@@ -39,22 +48,24 @@ pipeline {
         // 3️⃣ Prepare Dockerfile
         stage('Prepare Dockerfile') {
             steps {
-                script {
-                    def sharedDockerfile = libraryResource 'next/dev.Dockerfile'
-                    def dockerfilePath = 'Dockerfile'
+                container('node') {
+                    script {
+                        def sharedDockerfile = libraryResource 'next/dev.Dockerfile'
+                        def dockerfilePath   = 'Dockerfile'
 
-                    if (fileExists(dockerfilePath)) {
-                        def existingDockerfile = readFile(dockerfilePath)
-                        if (existingDockerfile != sharedDockerfile) {
-                            echo 'Dockerfile differs from shared library. Replacing it.'
-                            sh "rm -f ${dockerfilePath}"
-                            writeFile file: dockerfilePath, text: sharedDockerfile
+                        if (fileExists(dockerfilePath)) {
+                            def existingDockerfile = readFile(dockerfilePath)
+                            if (existingDockerfile != sharedDockerfile) {
+                                echo 'Dockerfile differs from shared library. Replacing it.'
+                                sh "rm -f ${dockerfilePath}"
+                                writeFile file: dockerfilePath, text: sharedDockerfile
+                            } else {
+                                echo 'Dockerfile is already up-to-date.'
+                            }
                         } else {
-                            echo 'Dockerfile is already up-to-date.'
+                            echo 'Dockerfile not found. Creating from shared library.'
+                            writeFile file: dockerfilePath, text: sharedDockerfile
                         }
-                    } else {
-                        echo 'Dockerfile not found. Creating from shared library.'
-                        writeFile file: dockerfilePath, text: sharedDockerfile
                     }
                 }
             }
@@ -63,29 +74,49 @@ pipeline {
         // 4️⃣ Build Docker Image
         stage('Build Image') {
             steps {
-                sh 'docker build --no-cache -t ${REPO_NAME}/${IMAGE_NAME}:${TAG} .'
+                container('docker') {
+                    sh '''
+                    echo "⏳ Waiting for Docker daemon..."
+                    until docker info > /dev/null 2>&1; do sleep 2; done
+                    echo "✅ Docker daemon is ready."
+                    docker build --no-cache -t ${REPO_NAME}/${IMAGE_NAME}:${TAG} .
+                    '''
+                }
             }
         }
 
         // 5️⃣ Ensure Docker Hub Repo Exists
         stage('Ensure Docker Hub Repo Exists') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'DOCKERHUB-CREDENTIAL',
-                    usernameVariable: 'DH_USERNAME',
-                    passwordVariable: 'DH_PASSWORD'
-                )]) {
-                    sh '''
-                    STATUS=$(curl -s -o /dev/null -w "%{http_code}" -u "$DH_USERNAME:$DH_PASSWORD" \
-                      https://hub.docker.com/v2/repositories/$REPO_NAME/$IMAGE_NAME/)
+                container('docker') {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'DOCKERHUB-CREDENTIAL',
+                        usernameVariable: 'DH_USERNAME',
+                        passwordVariable: 'DH_PASSWORD'
+                    )]) {
+                        sh '''
+                        STATUS=$(wget -qO- --server-response \
+                          --header="Authorization: Basic $(echo -n $DH_USERNAME:$DH_PASSWORD | base64)" \
+                          https://hub.docker.com/v2/repositories/$DH_USERNAME/$IMAGE_NAME/ 2>&1 \
+                          | grep "HTTP/" | awk '{print $2}' | tail -1)
 
-                    if [ "$STATUS" -eq 404 ]; then
-                      curl -s -u "$DH_USERNAME:$DH_PASSWORD" -X POST \
-                        https://hub.docker.com/v2/repositories/ \
-                        -H "Content-Type: application/json" \
-                        -d "{\"name\":\"$IMAGE_NAME\",\"is_private\":false}"
-                    fi
-                    '''
+                        echo "DockerHub repo check status: $STATUS"
+
+                        if [ "$STATUS" = "404" ] || [ -z "$STATUS" ]; then
+                          echo "Repo not found, creating..."
+                          TOKEN=$(wget -qO- --post-data="username=$DH_USERNAME&password=$DH_PASSWORD" \
+                            https://hub.docker.com/v2/users/login/ | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+
+                          wget -qO- --header="Authorization: JWT $TOKEN" \
+                            --header="Content-Type: application/json" \
+                            --post-data="{\"name\":\"$IMAGE_NAME\",\"namespace\":\"$DH_USERNAME\",\"is_private\":false}" \
+                            https://hub.docker.com/v2/repositories/
+                          echo "✅ Repo created."
+                        else
+                          echo "✅ Repo already exists."
+                        fi
+                        '''
+                    }
                 }
             }
         }
@@ -93,16 +124,19 @@ pipeline {
         // 6️⃣ Push Docker Image
         stage('Push Image') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'DOCKERHUB-CREDENTIAL',
-                    usernameVariable: 'DH_USERNAME',
-                    passwordVariable: 'DH_PASSWORD'
-                )]) {
-                    sh '''
-                    echo "$DH_PASSWORD" | docker login -u "$DH_USERNAME" --password-stdin
-                    docker push ${REPO_NAME}/${IMAGE_NAME}:${TAG}
-                    docker logout
-                    '''
+                container('docker') {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'DOCKERHUB-CREDENTIAL',
+                        usernameVariable: 'DH_USERNAME',
+                        passwordVariable: 'DH_PASSWORD'
+                    )]) {
+                        sh '''
+                        echo "$DH_PASSWORD" | docker login -u "$DH_USERNAME" --password-stdin
+                        docker push ${REPO_NAME}/${IMAGE_NAME}:${TAG}
+                        docker logout
+                        echo "✅ Image pushed: ${REPO_NAME}/${IMAGE_NAME}:${TAG}"
+                        '''
+                    }
                 }
             }
         }
@@ -110,13 +144,15 @@ pipeline {
 
     post {
         success {
-            echo "🚀 Build & deploy successful: ${REPO_NAME}/${IMAGE_NAME}:${TAG}"
+            echo "🚀 Build & push successful: ${REPO_NAME}/${IMAGE_NAME}:${TAG}"
         }
         failure {
             echo "❌ Pipeline failed. Check logs above."
         }
         always {
-            sh 'docker image prune -f || true'
+            container('docker') {
+                sh 'docker image prune -f || true'
+            }
         }
     }
 }
