@@ -9,11 +9,18 @@ pipeline {
     }
 
     environment {
-        REPO_NAME      = 'seang454'   // 🔁 Change this
+        REPO_NAME      = 'seang454'                   // 🔁 Your Docker Hub username
         IMAGE_NAME     = 'jenkins-itp-nextjs'
-        TAG            = 'latest'
+        TAG            = "${GIT_COMMIT[0..6]}"         // ✅ Use short commit SHA as tag (not 'latest')
         CONTAINER_NAME = 'nextjs-app'
         PORT           = '3000'
+
+        // 🔁 GitOps repo settings — update these
+        GITOPS_REPO    = 'github.com/seang454/jenkin-argo-gitops'
+        GITOPS_BRANCH  = 'main'
+        HELM_VALUES    = 'charts/frontend/values-dev.yaml'  // 🔁 path to your helm values file
+        ARGOCD_APP     = 'frontend-dev'                      // 🔁 your Argo CD app name
+        ARGOCD_SERVER  = 'argocd.mycompany.com'              // 🔁 your Argo CD server URL
     }
 
     stages {
@@ -140,11 +147,99 @@ pipeline {
                 }
             }
         }
+
+        // 7️⃣ Update GitOps Repo — triggers Argo CD to deploy new image
+        // stage('Update GitOps Repo') {
+        //     steps {
+        //         container('node') {
+        //             withCredentials([usernamePassword(
+        //                 credentialsId: 'GITOPS-GITHUB-CREDENTIAL',  // 🔁 Add this credential in Jenkins
+        //                 usernameVariable: 'GIT_USERNAME',
+        //                 passwordVariable: 'GIT_PASSWORD'
+        //             )]) {
+        //                 sh '''
+        //                 echo "📦 Cloning GitOps repo..."
+        //                 git clone https://${GIT_USERNAME}:${GIT_PASSWORD}@${GITOPS_REPO} gitops-repo
+        //                 cd gitops-repo
+
+        //                 echo "🔄 Updating image tag to: ${TAG}"
+
+        //                 # Update the image tag in the helm values file
+        //                 sed -i "s|tag:.*|tag: ${TAG}|" ${HELM_VALUES}
+
+        //                 # Verify the update
+        //                 echo "=== Updated image tag ==="
+        //                 grep "tag:" ${HELM_VALUES}
+
+        //                 # Commit and push the change
+        //                 git config user.email "jenkins-ci@mycompany.com"
+        //                 git config user.name "Jenkins CI"
+        //                 git add ${HELM_VALUES}
+        //                 git commit -m "ci: update nextjs image to ${TAG} [skip ci]"
+        //                 git push origin ${GITOPS_BRANCH}
+
+        //                 echo "✅ GitOps repo updated — Argo CD will deploy shortly"
+        //                 '''
+        //             }
+        //         }
+        //     }
+        // }
+
+        // // 8️⃣ Wait for Argo CD to Sync & Verify Deployment
+        // stage('Verify Argo CD Deployment') {
+        //     steps {
+        //         container('node') {
+        //             withCredentials([usernamePassword(
+        //                 credentialsId: 'ARGOCD-CREDENTIAL',    // 🔁 Add this credential in Jenkins
+        //                 usernameVariable: 'ARGOCD_USERNAME',
+        //                 passwordVariable: 'ARGOCD_PASSWORD'
+        //             )]) {
+        //                 sh '''
+        //                 echo "⏳ Waiting for Argo CD to detect changes (30s)..."
+        //                 sleep 30
+
+        //                 # Install argocd CLI if not available
+        //                 if ! command -v argocd &> /dev/null; then
+        //                     echo "Installing Argo CD CLI..."
+        //                     curl -sSL -o /usr/local/bin/argocd \
+        //                         https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+        //                     chmod +x /usr/local/bin/argocd
+        //                 fi
+
+        //                 # Login to Argo CD
+        //                 argocd login ${ARGOCD_SERVER} \
+        //                     --username ${ARGOCD_USERNAME} \
+        //                     --password ${ARGOCD_PASSWORD} \
+        //                     --insecure
+
+        //                 # Manually trigger sync
+        //                 echo "🔄 Triggering Argo CD sync for: ${ARGOCD_APP}"
+        //                 argocd app sync ${ARGOCD_APP}
+
+        //                 # Wait for sync and health to be OK
+        //                 echo "⏳ Waiting for deployment to be healthy..."
+        //                 argocd app wait ${ARGOCD_APP} \
+        //                     --sync \
+        //                     --health \
+        //                     --timeout 180
+
+        //                 # Show final app status
+        //                 argocd app get ${ARGOCD_APP}
+
+        //                 echo "✅ Deployment verified — ${IMAGE_NAME}:${TAG} is live!"
+        //                 '''
+        //             }
+        //         }
+        //     }
+        // }
     }
 
     post {
         success {
-            echo "🚀 Build & push successful: ${REPO_NAME}/${IMAGE_NAME}:${TAG}"
+            echo "🚀 Full GitOps pipeline successful!"
+            echo "   Image  : ${REPO_NAME}/${IMAGE_NAME}:${TAG}"
+            echo "   App    : ${ARGOCD_APP}"
+            echo "   Status : Live ✅"
         }
         failure {
             echo "❌ Pipeline failed. Check logs above."
@@ -153,6 +248,8 @@ pipeline {
             container('docker') {
                 sh 'docker image prune -f || true'
             }
+            // Clean up cloned gitops repo
+            sh 'rm -rf gitops-repo || true'
         }
     }
 }
