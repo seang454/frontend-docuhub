@@ -24,12 +24,89 @@ pipeline {
 
     stages {
 
+        // 0️⃣ Verify Pod Agent is Working on Kubernetes ─────────────────────────
+        stage('Verify: Node Container') {
+            steps {
+                container('node') {
+                    sh '''
+                    echo "=== Node Container ==="
+                    echo "OS:"
+                    cat /etc/os-release | grep PRETTY_NAME
+                    echo "Node version:"
+                    node --version
+                    echo "NPM version:"
+                    npm --version
+                    echo "Git version:"
+                    git --version || echo "❌ git NOT found — need to install it"
+                    echo "✅ Node container OK"
+                    '''
+                }
+            }
+        }
+
+        stage('Verify: Docker Container') {
+            steps {
+                container('docker') {
+                    sh '''
+                    echo "=== Docker Container ==="
+                    echo "⏳ Waiting for Docker daemon..."
+                    until docker info > /dev/null 2>&1; do
+                        echo "   ...waiting"
+                        sleep 2
+                    done
+                    echo "Docker version:"
+                    docker version
+                    echo "Docker info (brief):"
+                    docker info | grep -E "Server Version|Operating System|Total Memory"
+                    echo "✅ Docker container OK"
+                    '''
+                }
+            }
+        }
+
+        stage('Verify: Shared Workspace') {
+            steps {
+                container('node') {
+                    sh 'echo "hello from node" > /workspace/test-file.txt'
+                }
+                container('docker') {
+                    sh '''
+                    echo "=== Shared Workspace ==="
+                    echo "File written by node container:"
+                    cat /workspace/test-file.txt || echo "❌ Workspace NOT shared"
+                    rm -f /workspace/test-file.txt
+                    echo "✅ Shared workspace OK"
+                    '''
+                }
+            }
+        }
+
+        stage('Verify: Credentials') {
+            steps {
+                container('node') {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'DOCKERHUB-CREDENTIAL',
+                        usernameVariable: 'DH_USERNAME',
+                        passwordVariable: 'DH_PASSWORD'
+                    )]) {
+                        sh '''
+                        echo "=== Credentials ==="
+                        echo "DockerHub username: $DH_USERNAME"
+                        echo "DockerHub password length: ${#DH_PASSWORD} chars"
+                        echo "✅ DOCKERHUB-CREDENTIAL OK"
+                        '''
+                    }
+                }
+            }
+        }
+        // ──────────────────────────────────────────────────────────────────────
+
         // 1️⃣ Clone Next.js Code
         stage('Clone Code') {
             steps {
-                container('node') {                         // ✅ Fixed: wrapped in container()
+                container('node') {
                     git branch: 'master',
-                        credentialsId: 'GITHUB-CREDENTIAL', // ✅ Fixed: added credentials to avoid FileNotFoundException
+                        credentialsId: 'GITHUB-CREDENTIAL',
                         url: 'https://github.com/seang454/frontend-docuhub'
                 }
             }
@@ -151,8 +228,8 @@ pipeline {
             }
         }
 
-        // 7️⃣ Cleanup — moved from post{} to a stage to avoid container() limitation in post
-        stage('Cleanup') {                                  // ✅ Fixed: moved cleanup here instead of post{}
+        // 7️⃣ Cleanup
+        stage('Cleanup') {
             steps {
                 container('node') {
                     sh 'rm -rf gitops-repo || true'
