@@ -1,9 +1,9 @@
 @Library('devop_itp_share_library@master') _
 
 pipeline {
-    agent {
+agent {
         kubernetes {
-            yamlFile 'next/pod-template.yaml'
+            yamlFile 'resources/next/pod-template.yaml'  // ✅ fixed
             defaultContainer 'node'
         }
     }
@@ -245,11 +245,12 @@ pipeline {
             echo "❌ Pipeline failed. Check logs above."
         }
         always {
-            container('docker') {
+            container('node') {                         
+                sh 'rm -rf gitops-repo || true'
+            }
+            container('docker') {                       
                 sh 'docker image prune -f || true'
             }
-            // Clean up cloned gitops repo
-            sh 'rm -rf gitops-repo || true'
         }
     }
 }
