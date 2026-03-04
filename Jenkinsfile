@@ -1,26 +1,25 @@
 @Library('devop_itp_share_library@master') _
 
 pipeline {
-agent {
+    agent {
         kubernetes {
-            yamlFile 'resources/next/pod-template.yaml'  // ✅ fixed
+            yamlFile 'resources/next/pod-template.yaml'
             defaultContainer 'node'
         }
     }
 
     environment {
-        REPO_NAME      = 'seang454'                   // 🔁 Your Docker Hub username
+        REPO_NAME      = 'seang454'
         IMAGE_NAME     = 'jenkins-itp-nextjs'
-        TAG            = "${GIT_COMMIT[0..6]}"         // ✅ Use short commit SHA as tag (not 'latest')
+        TAG            = "${GIT_COMMIT[0..6]}"
         CONTAINER_NAME = 'nextjs-app'
         PORT           = '3000'
 
-        // 🔁 GitOps repo settings — update these
         GITOPS_REPO    = 'github.com/seang454/jenkin-argo-gitops'
         GITOPS_BRANCH  = 'main'
-        HELM_VALUES    = 'charts/frontend/values-dev.yaml'  // 🔁 path to your helm values file
-        ARGOCD_APP     = 'frontend-dev'                      // 🔁 your Argo CD app name
-        ARGOCD_SERVER  = 'argocd.mycompany.com'              // 🔁 your Argo CD server URL
+        HELM_VALUES    = 'charts/frontend/values-dev.yaml'
+        ARGOCD_APP     = 'frontend-dev'
+        ARGOCD_SERVER  = 'argocd.seang.shop'
     }
 
     stages {
@@ -28,7 +27,11 @@ agent {
         // 1️⃣ Clone Next.js Code
         stage('Clone Code') {
             steps {
-                git 'https://github.com/seang454/frontend-docuhub'  // 🔁 Change this
+                container('node') {                         // ✅ Fixed: wrapped in container()
+                    git branch: 'master',
+                        credentialsId: 'GITHUB-CREDENTIAL', // ✅ Fixed: added credentials to avoid FileNotFoundException
+                        url: 'https://github.com/seang454/frontend-docuhub'
+                }
             }
         }
 
@@ -148,12 +151,24 @@ agent {
             }
         }
 
-        // 7️⃣ Update GitOps Repo — triggers Argo CD to deploy new image
+        // 7️⃣ Cleanup — moved from post{} to a stage to avoid container() limitation in post
+        stage('Cleanup') {                                  // ✅ Fixed: moved cleanup here instead of post{}
+            steps {
+                container('node') {
+                    sh 'rm -rf gitops-repo || true'
+                }
+                container('docker') {
+                    sh 'docker image prune -f || true'
+                }
+            }
+        }
+
+        // 8️⃣ Update GitOps Repo — triggers Argo CD to deploy new image
         // stage('Update GitOps Repo') {
         //     steps {
         //         container('node') {
         //             withCredentials([usernamePassword(
-        //                 credentialsId: 'GITOPS-GITHUB-CREDENTIAL',  // 🔁 Add this credential in Jenkins
+        //                 credentialsId: 'GITOPS-GITHUB-CREDENTIAL',
         //                 usernameVariable: 'GIT_USERNAME',
         //                 passwordVariable: 'GIT_PASSWORD'
         //             )]) {
@@ -161,23 +176,15 @@ agent {
         //                 echo "📦 Cloning GitOps repo..."
         //                 git clone https://${GIT_USERNAME}:${GIT_PASSWORD}@${GITOPS_REPO} gitops-repo
         //                 cd gitops-repo
-
         //                 echo "🔄 Updating image tag to: ${TAG}"
-
-        //                 # Update the image tag in the helm values file
         //                 sed -i "s|tag:.*|tag: ${TAG}|" ${HELM_VALUES}
-
-        //                 # Verify the update
         //                 echo "=== Updated image tag ==="
         //                 grep "tag:" ${HELM_VALUES}
-
-        //                 # Commit and push the change
         //                 git config user.email "jenkins-ci@mycompany.com"
         //                 git config user.name "Jenkins CI"
         //                 git add ${HELM_VALUES}
         //                 git commit -m "ci: update nextjs image to ${TAG} [skip ci]"
         //                 git push origin ${GITOPS_BRANCH}
-
         //                 echo "✅ GitOps repo updated — Argo CD will deploy shortly"
         //                 '''
         //             }
@@ -185,47 +192,36 @@ agent {
         //     }
         // }
 
-        // // 8️⃣ Wait for Argo CD to Sync & Verify Deployment
+        // // 9️⃣ Wait for Argo CD to Sync & Verify Deployment
         // stage('Verify Argo CD Deployment') {
         //     steps {
         //         container('node') {
         //             withCredentials([usernamePassword(
-        //                 credentialsId: 'ARGOCD-CREDENTIAL',    // 🔁 Add this credential in Jenkins
+        //                 credentialsId: 'ARGOCD-CREDENTIAL',
         //                 usernameVariable: 'ARGOCD_USERNAME',
         //                 passwordVariable: 'ARGOCD_PASSWORD'
         //             )]) {
         //                 sh '''
         //                 echo "⏳ Waiting for Argo CD to detect changes (30s)..."
         //                 sleep 30
-
-        //                 # Install argocd CLI if not available
         //                 if ! command -v argocd &> /dev/null; then
         //                     echo "Installing Argo CD CLI..."
         //                     curl -sSL -o /usr/local/bin/argocd \
         //                         https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
         //                     chmod +x /usr/local/bin/argocd
         //                 fi
-
-        //                 # Login to Argo CD
         //                 argocd login ${ARGOCD_SERVER} \
         //                     --username ${ARGOCD_USERNAME} \
         //                     --password ${ARGOCD_PASSWORD} \
         //                     --insecure
-
-        //                 # Manually trigger sync
         //                 echo "🔄 Triggering Argo CD sync for: ${ARGOCD_APP}"
         //                 argocd app sync ${ARGOCD_APP}
-
-        //                 # Wait for sync and health to be OK
         //                 echo "⏳ Waiting for deployment to be healthy..."
         //                 argocd app wait ${ARGOCD_APP} \
         //                     --sync \
         //                     --health \
         //                     --timeout 180
-
-        //                 # Show final app status
         //                 argocd app get ${ARGOCD_APP}
-
         //                 echo "✅ Deployment verified — ${IMAGE_NAME}:${TAG} is live!"
         //                 '''
         //             }
@@ -243,14 +239,6 @@ agent {
         }
         failure {
             echo "❌ Pipeline failed. Check logs above."
-        }
-        always {
-            container('node') {                         
-                sh 'rm -rf gitops-repo || true'
-            }
-            container('docker') {                       
-                sh 'docker image prune -f || true'
-            }
         }
     }
 }
