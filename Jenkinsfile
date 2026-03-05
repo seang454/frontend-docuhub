@@ -19,24 +19,60 @@ pipeline {
 
     stages {
 
-        // 0️⃣ Verify Environment ────────────────────────────────────────────────
+        // 0️⃣ Verify Environment & Auto-Install Missing Tools ──────────────────
         stage('Verify: Environment') {
             steps {
                 sh '''
                 echo "=== System Info ==="
                 cat /etc/os-release | grep PRETTY_NAME
 
+                # ── Node & NPM ────────────────────────────────────────────────
                 echo "=== Node version ==="
-                node --version || echo "❌ node NOT found — install nodejs"
+                if ! command -v node > /dev/null 2>&1; then
+                    echo "⚙️  Node not found — installing Node 20..."
+                    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+                    sudo apt install -y nodejs
+                    echo "✅ Node installed"
+                fi
+                node --version
+                npm --version
+                echo "✅ Node & NPM OK"
 
-                echo "=== NPM version ==="
-                npm --version || echo "❌ npm NOT found"
-
+                # ── Git ───────────────────────────────────────────────────────
                 echo "=== Git version ==="
-                git --version || echo "❌ git NOT found"
+                if ! command -v git > /dev/null 2>&1; then
+                    echo "⚙️  Git not found — installing..."
+                    sudo apt install -y git
+                fi
+                git --version
+                echo "✅ Git OK"
 
+                # ── curl ──────────────────────────────────────────────────────
+                if ! command -v curl > /dev/null 2>&1; then
+                    echo "⚙️  curl not found — installing..."
+                    sudo apt install -y curl
+                fi
+                curl --version | head -1
+                echo "✅ curl OK"
+
+                # ── Docker ────────────────────────────────────────────────────
                 echo "=== Docker version ==="
-                docker version || echo "❌ docker NOT found — install docker"
+                if ! command -v docker > /dev/null 2>&1; then
+                    echo "⚙️  Docker not found — installing..."
+                    sudo apt install -y ca-certificates curl gnupg
+                    sudo install -m 0755 -d /etc/apt/keyrings
+                    curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+                    sudo chmod a+r /etc/apt/keyrings/docker.gpg
+                    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+                      https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" | \
+                      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+                    sudo apt update
+                    sudo apt install -y docker-ce docker-ce-cli containerd.io
+                    sudo usermod -aG docker jenkins
+                    echo "✅ Docker installed — restart Jenkins if permission errors occur"
+                fi
+                docker --version
+                echo "✅ Docker OK"
 
                 echo "✅ Environment check done"
                 '''
@@ -46,11 +82,27 @@ pipeline {
         stage('Verify: Docker Daemon') {
             steps {
                 sh '''
-                echo "⏳ Waiting for Docker daemon..."
+                echo "⏳ Checking Docker daemon..."
+
+                # Start Docker service if not running
+                if ! sudo systemctl is-active --quiet docker; then
+                    echo "⚙️  Docker daemon not running — starting..."
+                    sudo systemctl start docker
+                fi
+
+                # Wait for Docker to be ready with retry limit
+                RETRIES=10
+                COUNT=0
                 until docker info > /dev/null 2>&1; do
-                    echo "   ...waiting"
-                    sleep 2
+                    COUNT=$((COUNT+1))
+                    if [ $COUNT -ge $RETRIES ]; then
+                        echo "❌ Docker daemon failed to start after ${RETRIES} attempts"
+                        exit 1
+                    fi
+                    echo "   ...waiting ($COUNT/$RETRIES)"
+                    sleep 3
                 done
+
                 echo "Docker info:"
                 docker info | grep -E "Server Version|Operating System|Total Memory"
                 echo "✅ Docker daemon is ready"
