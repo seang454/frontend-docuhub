@@ -20,7 +20,7 @@ pipeline {
     stages {
 
         // 0️⃣ Verify Environment & Auto-Install Missing Tools ──────────────────
-        stage('Verify: Environment') {
+        stage('Verify: Environment that we have') {
             steps {
                 sh '''
                 echo "=== System Info ==="
