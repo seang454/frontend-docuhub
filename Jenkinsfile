@@ -133,7 +133,7 @@ pipeline {
             steps {
                 git branch: 'master',
                     credentialsId: 'GITHUB-CREDENTIAL',
-                    url: 'https://github.com/seang454/frontend-docuhub'
+                    url: 'https://github.com/seang454/docuhub-admin'
             }
         }
 
