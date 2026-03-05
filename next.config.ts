@@ -1,6 +1,7 @@
 // import { i18n } from './next-i18next.config'; // Not used in App Router
 
 const nextConfig = {
+  output: 'standalone',  // ✅ add this line
   reactStrictMode: true,
   // Explicitly set the project root to silence workspace root warnings
   outputFileTracingRoot: __dirname,
